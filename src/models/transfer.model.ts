@@ -1,8 +1,8 @@
 import { Schema, model, Document, Types } from "mongoose";
 
 export interface ITransfer extends Document {
-  fromLocationId: Types.ObjectId;
-  toLocationId: Types.ObjectId;
+  fromWarehouseId: Types.ObjectId;
+  toWarehouseId: Types.ObjectId;
   productId: Types.ObjectId;
   quantity: number;
   unit: string;
@@ -13,14 +13,14 @@ export interface ITransfer extends Document {
 
 const TransferSchema = new Schema<ITransfer>(
   {
-    fromLocationId: {
+    fromWarehouseId: {
       type: Schema.Types.ObjectId,
-      ref: "Location",
+      ref: "Warehouse",
       required: true,
     },
-    toLocationId: {
+    toWarehouseId: {
       type: Schema.Types.ObjectId,
-      ref: "Location",
+      ref: "Warehouse",
       required: true,
     },
     productId: { type: Schema.Types.ObjectId, required: true },
