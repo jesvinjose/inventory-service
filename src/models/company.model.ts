@@ -1,5 +1,6 @@
 // models/company.model.ts
-import { Schema, model, Document } from "mongoose";
+import mongoose, { Schema, model, Document, PaginateModel } from "mongoose";
+import mongoosePaginate from "mongoose-paginate-v2";
 
 export interface ICompany extends Document {
   name: string;
@@ -9,6 +10,9 @@ export interface ICompany extends Document {
   createdAt: Date;
   updatedAt: Date;
 }
+
+// 🔹 Extend the model interface to include pagination
+export interface ICompanyModel<T = ICompany> extends mongoose.PaginateModel<T> {}
 
 const CompanySchema = new Schema<ICompany>(
   {
@@ -24,4 +28,10 @@ const CompanySchema = new Schema<ICompany>(
   { timestamps: true }
 );
 
-export const CompanyModel = model<ICompany>("Company", CompanySchema);
+// 🔹 Add pagination plugin
+CompanySchema.plugin(mongoosePaginate);
+
+export const CompanyModel = model<ICompany, ICompanyModel<ICompany>>(
+  "Company",
+  CompanySchema
+);

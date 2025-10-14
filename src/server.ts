@@ -1,8 +1,9 @@
-import express from 'express';
-import dotenv from 'dotenv';
-import cors from 'cors';
-import { connectDB } from './config/db';
-import companyRoutes from './routes/company.routes';
+import express from "express";
+import dotenv from "dotenv";
+import cors from "cors";
+import { connectDB } from "./config/db";
+import companyRoutes from "./routes/company.route";
+import branchRoutes from "./routes/branch.route";
 
 dotenv.config();
 const app = express();
@@ -11,7 +12,8 @@ app.use(cors());
 app.use(express.json());
 
 // Routes
-app.use('/api/companies', companyRoutes);
+app.use("/api/companies", companyRoutes);
+app.use("/api/branches", branchRoutes);
 
 const PORT = process.env.PORT || 5000;
 
