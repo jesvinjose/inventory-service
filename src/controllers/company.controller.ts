@@ -139,8 +139,9 @@ export const updateCompany = async (req: Request, res: Response) => {
 // Soft delete a company
 export const deleteCompany = async (req: Request, res: Response) => {
   try {
-    const company = await CompanyModel.findByIdAndUpdate(
-      req.body.id,
+     // 🔹 Find and update only if company is active
+    const company = await CompanyModel.findOneAndUpdate(
+      { _id: req.body.id, status: "active" },
       { status: "deleted" },
       { new: true }
     );
@@ -148,7 +149,7 @@ export const deleteCompany = async (req: Request, res: Response) => {
     if (!company) {
       return res
         .status(404)
-        .json({ status: false, message: "Company not found." });
+        .json({ status: false, message: "Company not found or already deleted." });
     }
 
     return res

@@ -1,4 +1,5 @@
-import { Schema, model, Document, Types } from "mongoose";
+import mongoose, { Schema, model, Document, Types } from "mongoose";
+import mongoosePaginate from "mongoose-paginate-v2";
 
 export interface IWarehouse extends Document {
   branchId: Types.ObjectId;
@@ -12,6 +13,10 @@ export interface IWarehouse extends Document {
   createdAt: Date;
   updatedAt: Date;
 }
+
+// 🔹 Extend the model interface to include pagination
+export interface IWarehouseModel<T = IWarehouse>
+  extends mongoose.PaginateModel<T> {}
 
 const WarehouseSchema = new Schema<IWarehouse>(
   {
@@ -42,4 +47,9 @@ WarehouseSchema.index({ branchId: 1, name: 1 }, { unique: true });
 // Geo index for distance queries
 WarehouseSchema.index({ coordinates: "2dsphere" });
 
-export const WarehouseModel = model<IWarehouse>("Warehouse", WarehouseSchema);
+WarehouseSchema.plugin(mongoosePaginate);
+
+export const WarehouseModel = model<IWarehouse, IWarehouseModel<IWarehouse>>(
+  "Warehouse",
+  WarehouseSchema
+);

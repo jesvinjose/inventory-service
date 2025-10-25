@@ -138,3 +138,113 @@ export const getBranchById = async (req: Request, res: Response) => {
     return res.status(500).json({ status: false, message: error.message });
   }
 };
+
+// Soft delete a branch
+export const deleteBranch = async (req: Request, res: Response) => {
+  try {
+    // 🔹 Find and update only if branch is active
+    const branch = await BranchModel.findOneAndUpdate(
+      { _id: req.body.id, status: "active" },
+      { status: "deleted" },
+      { new: true }
+    );
+
+    if (!branch) {
+      return res
+        .status(404)
+        .json({
+          status: false,
+          message: "Branch not found or already deleted.",
+        });
+    }
+
+    return res
+      .status(200)
+      .json({ status: true, message: "Branch deleted successfully." });
+  } catch (error: any) {
+    return res.status(500).json({ status: false, message: error.message });
+  }
+};
+
+export const updateBranch = async (req: Request, res: Response) => {
+  try {
+    const { id, name, address, status } = req.body;
+
+    if (!id) {
+      return res
+        .status(400)
+        .json({ status: false, message: "Branch ID is required." });
+    }
+
+    // ✅ Find existing branch
+    const branch = await BranchModel.findById(id);
+    if (!branch || branch.status === "deleted") {
+      return res
+        .status(404)
+        .json({ status: false, message: "Branch not found or deleted." });
+    }
+
+    // ✅ Apply updates (only fields that are provided)
+    if (name !== undefined) branch.name = name.trim();
+    if (address !== undefined) branch.address = address.trim();
+    if (status !== undefined) branch.status = status;
+
+    // ✅ Save with validation
+    await branch.save();
+
+    return res.status(200).json({
+      status: true,
+      message: "Branch updated successfully.",
+      data: branch,
+    });
+  } catch (error: any) {
+    if (error.code === 11000) {
+      // Handle duplicate name within same company
+      return res.status(400).json({
+        status: false,
+        message: "Branch name must be unique within the company.",
+      });
+    }
+
+    return res
+      .status(500)
+      .json({ status: false, message: error.message || "Server error" });
+  }
+};
+
+export const getBranchesForDropdown = async (req: Request, res: Response) => {
+  try {
+    const { companyId } = req.body;
+
+    // 🔹 Filter active branches, optionally by companyId
+    const filter: any = { status: "active" };
+    if (companyId) filter.companyId = companyId;
+
+    // 🔹 Fetch with company populated
+    const branches = await BranchModel.find(filter)
+      .populate("companyId", "name") // only bring company name
+      .select("_id name companyId")
+      .sort({ name: 1 });
+
+    // 🔹 Map for clean dropdown response
+    const data = branches.map((b) => ({
+      id: b._id,
+      name: b.name,
+      company: b.companyId ? (b.companyId as any).name : null,
+      companyId: b.companyId?._id || null,
+    }));
+
+    return res.status(200).json({
+      status: true,
+      message: "Branches fetched successfully.",
+      data,
+    });
+  } catch (error: any) {
+    return res.status(500).json({
+      status: false,
+      message: error.message || "Failed to fetch branches.",
+    });
+  }
+};
+
+

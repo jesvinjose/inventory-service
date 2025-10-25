@@ -1,5 +1,5 @@
 // models/company.model.ts
-import mongoose, { Schema, model, Document, PaginateModel } from "mongoose";
+import mongoose, { Schema, model, Document } from "mongoose";
 import mongoosePaginate from "mongoose-paginate-v2";
 
 export interface ICompany extends Document {
@@ -12,7 +12,8 @@ export interface ICompany extends Document {
 }
 
 // 🔹 Extend the model interface to include pagination
-export interface ICompanyModel<T = ICompany> extends mongoose.PaginateModel<T> {}
+export interface ICompanyModel<T = ICompany>
+  extends mongoose.PaginateModel<T> {}
 
 const CompanySchema = new Schema<ICompany>(
   {

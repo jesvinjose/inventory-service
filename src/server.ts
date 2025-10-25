@@ -4,6 +4,7 @@ import cors from "cors";
 import { connectDB } from "./config/db";
 import companyRoutes from "./routes/company.route";
 import branchRoutes from "./routes/branch.route";
+import warehouseRoutes from "./routes/warehouse.route";
 
 dotenv.config();
 const app = express();
@@ -14,6 +15,7 @@ app.use(express.json());
 // Routes
 app.use("/api/companies", companyRoutes);
 app.use("/api/branches", branchRoutes);
+app.use("/api/warehouse", warehouseRoutes);
 
 const PORT = process.env.PORT || 5000;
 
