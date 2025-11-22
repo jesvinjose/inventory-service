@@ -5,6 +5,7 @@ export interface IWarehouse extends Document {
   branchId: Types.ObjectId;
   name: string; // e.g., "Main Store" or "Default Storage"
   isCentral?: boolean; // optional for central warehouse logic
+  isDefault:boolean,
   coordinates?: {
     type: "Point";
     coordinates: [number, number]; // [lng, lat]
@@ -28,6 +29,7 @@ const WarehouseSchema = new Schema<IWarehouse>(
     },
     name: { type: String, required: true },
     isCentral: { type: Boolean, default: false },
+    isDefault: { type: Boolean, default: false },
     coordinates: {
       type: {
         type: String,

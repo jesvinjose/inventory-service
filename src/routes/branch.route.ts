@@ -19,5 +19,4 @@ router.post("/delete", deleteBranch); // Soft delete branch
 router.post("/update", updateBranch); // Update branch
 router.post("/dropdown", getBranchesForDropdown); // List branches for dropdown
 
-
 export default router;

@@ -1,6 +1,7 @@
 import { Request, Response } from "express";
 import { BranchModel } from "../models/branch.model";
 import { WarehouseModel } from "../models/warehouse.model";
+import mongoose from "mongoose";
 
 export const createBranch = async (req: Request, res: Response) => {
   try {
@@ -21,6 +22,7 @@ export const createBranch = async (req: Request, res: Response) => {
       branchId: branch._id,
       name: "Default Storage",
       isCentral: false,
+      isDefault: true, // 👈 mark as default
     });
     await defaultWarehouse.save();
 
@@ -141,12 +143,22 @@ export const getBranchById = async (req: Request, res: Response) => {
 
 // Soft delete a branch
 export const deleteBranch = async (req: Request, res: Response) => {
+  const session = await mongoose.startSession();
   try {
+    session.startTransaction();
+
+    const { id } = req.body;
+    if (!id) {
+      return res
+        .status(400)
+        .json({ status: false, message: "Branch ID is required." });
+    }
+
     // 🔹 Find and update only if branch is active
     const branch = await BranchModel.findOneAndUpdate(
-      { _id: req.body.id, status: "active" },
+      { _id: id, status: "active" },
       { status: "deleted" },
-      { new: true }
+      { new: true, session }
     );
 
     if (!branch) {
@@ -158,11 +170,26 @@ export const deleteBranch = async (req: Request, res: Response) => {
         });
     }
 
+    // 🔹 Step 2: Soft delete all warehouses under this branch
+    await WarehouseModel.updateMany(
+      { branchId: branch._id, status: { $ne: "deleted" } },
+      { $set: { status: "deleted" } },
+      { session }
+    );
+
+    // 🔹 Step 3: Commit the transaction
+    await session.commitTransaction();
+
     return res
       .status(200)
-      .json({ status: true, message: "Branch deleted successfully." });
+      .json({ status: true, message: "Branch and its warehouses deleted successfully (soft delete)." });
   } catch (error: any) {
-    return res.status(500).json({ status: false, message: error.message });
+    // 🔹 Rollback on any error
+    await session.abortTransaction();
+    return res.status(500).json({ status: false, message: error.message || "Failed to delete branch." });
+  } finally {
+    // ✅ Always end the session
+    await session.endSession();
   }
 };
 

@@ -1,5 +1,8 @@
 import { Request, Response } from "express";
 import { CompanyModel } from "../models/company.model";
+import mongoose from "mongoose";
+import { BranchModel } from "../models/branch.model";
+import { WarehouseModel } from "../models/warehouse.model";
 
 // Create a new company
 export const createCompany = async (req: Request, res: Response) => {
@@ -138,25 +141,74 @@ export const updateCompany = async (req: Request, res: Response) => {
 
 // Soft delete a company
 export const deleteCompany = async (req: Request, res: Response) => {
+  const session = await mongoose.startSession();
   try {
-     // 🔹 Find and update only if company is active
+    session.startTransaction();
+
+    const { id } = req.body;
+    if (!id) {
+      return res
+        .status(400)
+        .json({ status: false, message: "Company ID is required." });
+    }
+
+    // 🔹 Find and update only if company is active
     const company = await CompanyModel.findOneAndUpdate(
-      { _id: req.body.id, status: "active" },
+      { _id: id, status: "active" },
       { status: "deleted" },
-      { new: true }
+      { new: true, session }
     );
 
     if (!company) {
-      return res
-        .status(404)
-        .json({ status: false, message: "Company not found or already deleted." });
+      await session.abortTransaction();
+      return res.status(404).json({
+        status: false,
+        message: "Company not found or already deleted.",
+      });
     }
 
-    return res
-      .status(200)
-      .json({ status: true, message: "Company deleted successfully." });
+    // 🔹 Step 2: Soft delete all branches under this company
+    const branches = await BranchModel.find(
+      { companyId: company._id, status: { $ne: "deleted" } },
+      "_id",
+      { session }
+    );
+
+    const branchIds = branches.map((b) => b._id);
+
+    await BranchModel.updateMany(
+      { companyId: company._id, status: { $ne: "deleted" } },
+      { $set: { status: "deleted" } },
+      { session }
+    );
+
+    // 🔹 Step 3: Soft delete all warehouses under those branches
+    if (branchIds.length > 0) {
+      await WarehouseModel.updateMany(
+        { branchId: { $in: branchIds }, status: { $ne: "deleted" } },
+        { $set: { status: "deleted" } },
+        { session }
+      );
+    }
+
+    // 🔹 Step 4: Commit the transaction
+    await session.commitTransaction();
+
+    return res.status(200).json({
+      status: true,
+      message:
+        "Company and all its branches and warehouses deleted successfully (soft delete).",
+    });
   } catch (error: any) {
-    return res.status(500).json({ status: false, message: error.message });
+    // 🔹 Rollback on any error
+    await session.abortTransaction();
+    return res.status(500).json({
+      status: false,
+      message: error.message || "Failed to delete company.",
+    });
+  } finally {
+    // ✅ Always end the session
+    await session.endSession();
   }
 };
 

@@ -6,7 +6,7 @@ import {
   updateWarehouse,
   deleteWarehouse,
   getWarehousesForDropdown,
-} from "../controllers/warehouse.controller.js";
+} from "../controllers/warehouse.controller";
 
 const router = express.Router();
 

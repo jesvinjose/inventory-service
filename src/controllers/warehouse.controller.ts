@@ -165,6 +165,14 @@ export const deleteWarehouse = async (req: Request, res: Response) => {
         message: "Warehouse not found or already deleted.",
       });
     }
+    
+    // 🚫 Prevent deletion of default warehouse
+    if (warehouse.isDefault) {
+      return res.status(400).json({
+        status: false,
+        message: "Default warehouse cannot be deleted.",
+      });
+    }
 
     // Case 2: Perform soft delete
     warehouse.status = "deleted";
