@@ -1,10 +1,19 @@
 // controllers/warehouse.controller.ts
 import { Request, Response } from "express";
 import { WarehouseModel } from "../models/warehouse.model";
+import mongoose from "mongoose";
+import { InventoryModel } from "../models/inventory.model";
 
 export const createWarehouse = async (req: Request, res: Response) => {
+  const session = await mongoose.startSession();
   try {
-    const { branchId, name, isCentral, coordinates } = req.body;
+    const {
+      branchId,
+      name,
+      isCentral = false,
+      coordinates,
+      isDefault = false,
+    } = req.body;
 
     if (!branchId || !name) {
       return res
@@ -12,26 +21,60 @@ export const createWarehouse = async (req: Request, res: Response) => {
         .json({ status: false, message: "branchId and name are required." });
     }
 
-    const warehouse = new WarehouseModel({
-      branchId,
-      name,
-      isCentral: isCentral || false,
-      coordinates,
+    // start transaction
+    await session.withTransaction(async () => {
+      // If isCentral true, unset existing central for the branch
+      if (isCentral) {
+        await WarehouseModel.updateMany(
+          { branchId, isCentral: true, status: "active" },
+          { $set: { isCentral: false } },
+          { session }
+        );
+      }
+
+      // If isDefault true, unset existing default for the branch
+      if (isDefault) {
+        await WarehouseModel.updateMany(
+          { branchId, isDefault: true, status: "active" },
+          { $set: { isDefault: false } },
+          { session }
+        );
+      }
+
+      const warehouse = new WarehouseModel({
+        branchId,
+        name,
+        isCentral,
+        isDefault,
+        coordinates,
+      });
+      await warehouse.save({ session });
+      // response must be outside transaction callback in some setups,
+      // but keeping simple: return by throwing/capturing result after commit.
+      // We'll attach created warehouse to session for outer scope.
+      (session as any).createdWarehouse = warehouse;
     });
-    await warehouse.save();
+
+    const created = (session as any).createdWarehouse;
+    session.endSession();
 
     return res.status(201).json({
       status: true,
       message: "Warehouse created successfully.",
-      data: warehouse,
+      data: created,
     });
   } catch (error: any) {
+    // Duplicate key could happen if two concurrent creators race despite transaction;
+    // the partial unique index ensures DB-level safety.
     if (error.code === 11000) {
-      return res.status(400).json({
-        status: false,
-        message: "Warehouse name must be unique within this branch.",
-      });
+      // customize message for isCentral or name duplicate based on key pattern
+      const msg =
+        /isCentral/.test(error.message) || /isDefault/.test(error.message)
+          ? "Only one central/default warehouse is allowed per branch."
+          : "Warehouse name must be unique within this branch.";
+      return res.status(400).json({ status: false, message: msg });
     }
+
     return res.status(500).json({ status: false, message: error.message });
   }
 };
@@ -106,7 +149,7 @@ export const getWarehouseById = async (req: Request, res: Response) => {
 
 export const updateWarehouse = async (req: Request, res: Response) => {
   try {
-    const { id, name, isCentral, coordinates, status } = req.body;
+    const { id, name, coordinates, status } = req.body;
 
     if (!id)
       return res
@@ -120,7 +163,6 @@ export const updateWarehouse = async (req: Request, res: Response) => {
         .json({ status: false, message: "Warehouse not found." });
 
     if (name) existingWarehouse.name = name;
-    if (isCentral !== undefined) existingWarehouse.isCentral = isCentral;
     if (coordinates) existingWarehouse.coordinates = coordinates;
     if (status) existingWarehouse.status = status;
 
@@ -143,6 +185,7 @@ export const updateWarehouse = async (req: Request, res: Response) => {
 };
 
 export const deleteWarehouse = async (req: Request, res: Response) => {
+  const session = await mongoose.startSession();
   try {
     const { id } = req.body;
 
@@ -152,41 +195,74 @@ export const deleteWarehouse = async (req: Request, res: Response) => {
         .json({ status: false, message: "id is required." });
     }
 
-    // Fetch only active warehouse
-    const warehouse = await WarehouseModel.findOne({
-      _id: id,
-      status: { $ne: "deleted" },
-    });
-
-    // Case 1: Not found or already deleted
-    if (!warehouse) {
-      return res.status(404).json({
-        status: false,
-        message: "Warehouse not found or already deleted.",
-      });
-    }
-    
-    // 🚫 Prevent deletion of default warehouse
-    if (warehouse.isDefault) {
-      return res.status(400).json({
-        status: false,
-        message: "Default warehouse cannot be deleted.",
-      });
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ status: false, message: "Invalid id." });
     }
 
-    // Case 2: Perform soft delete
-    warehouse.status = "deleted";
-    await warehouse.save();
+    // Use transaction for safe check + delete
+    let result: any;
+    await session.withTransaction(async () => {
+      // Fetch warehouse (only non-deleted)
+      const warehouse = await WarehouseModel.findOne({
+        _id: id,
+        status: { $ne: "deleted" },
+      }).session(session);
 
-    return res.status(200).json({
-      status: true,
-      message: "Warehouse deleted successfully (soft delete).",
+      // Case 1: Not found or already deleted
+      if (!warehouse) {
+        throw {
+          statusCode: 404,
+          body: {
+            status: false,
+            message: "Warehouse not found or already deleted.",
+          },
+        };
+      }
+
+      // Check if any inventory exists in this warehouse
+      // Since you will never keep quantity = 0 records, ANY record means active inventory.
+      const hasInventory = await InventoryModel.exists({
+        warehouseId: id,
+      }).session(session);
+
+      if (hasInventory) {
+        throw {
+          statusCode: 400,
+          body: {
+            status: false,
+            message:
+              "Cannot delete warehouse: inventory exists in this warehouse.",
+          },
+        };
+      }
+
+      // Soft delete
+      await WarehouseModel.updateOne(
+        { _id: id },
+        { $set: { status: "deleted" } }
+      ).session(session);
+
+      result = {
+        status: true,
+        message: "Warehouse deleted successfully (soft delete).",
+      };
     });
+
+    return res.status(200).json(result);
   } catch (error: any) {
+    // Custom thrown error
+    if (error?.statusCode) {
+      return res.status(error.statusCode).json(error.body);
+    }
+
+    // Generic error
     return res.status(500).json({
       status: false,
-      message: error.message,
+      message: error?.message,
     });
+  } finally {
+    // ✅ Always end the session
+    await session.endSession();
   }
 };
 
@@ -211,4 +287,3 @@ export const getWarehousesForDropdown = async (req: Request, res: Response) => {
     return res.status(500).json({ status: false, message: error.message });
   }
 };
-

@@ -2,10 +2,9 @@ import mongoose, { Schema, model, Document, Types } from "mongoose";
 import mongoosePaginate from "mongoose-paginate-v2";
 
 export interface IWarehouse extends Document {
-  branchId: Types.ObjectId;
+  companyId: Types.ObjectId;
+  branchIds: Types.ObjectId[]; // now supports multiple branches;
   name: string; // e.g., "Main Store" or "Default Storage"
-  isCentral?: boolean; // optional for central warehouse logic
-  isDefault:boolean,
   coordinates?: {
     type: "Point";
     coordinates: [number, number]; // [lng, lat]
@@ -21,15 +20,21 @@ export interface IWarehouseModel<T = IWarehouse>
 
 const WarehouseSchema = new Schema<IWarehouse>(
   {
-    branchId: {
+    companyId: {
       type: Schema.Types.ObjectId,
-      ref: "Branch",
+      ref: "Company",
       required: true,
       index: true,
     },
+    branchIds: [
+      {
+        type: Schema.Types.ObjectId,
+        ref: "Branch",
+        required: false, // optional
+        index: true,
+      },
+    ],
     name: { type: String, required: true },
-    isCentral: { type: Boolean, default: false },
-    isDefault: { type: Boolean, default: false },
     coordinates: {
       type: {
         type: String,
@@ -43,11 +48,13 @@ const WarehouseSchema = new Schema<IWarehouse>(
   { timestamps: true }
 );
 
-// ✅ Unique index: warehouse name per branch
-WarehouseSchema.index({ branchId: 1, name: 1 }, { unique: true });
+// Unique warehouse name per company
+WarehouseSchema.index({ companyId: 1, name: 1 }, { unique: true });
 
-// Geo index for distance queries
-WarehouseSchema.index({ coordinates: "2dsphere" });
+WarehouseSchema.index({ branchIds: 1, name: 1 }, { unique: true });
+
+// Optional: enable geo queries when you actually store coordinates
+// WarehouseSchema.index({ "coordinates": "2dsphere" });
 
 WarehouseSchema.plugin(mongoosePaginate);
 

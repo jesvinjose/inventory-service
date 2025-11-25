@@ -4,41 +4,83 @@ import { WarehouseModel } from "../models/warehouse.model";
 import mongoose from "mongoose";
 
 export const createBranch = async (req: Request, res: Response) => {
-  try {
-    const { companyId, name, address } = req.body;
+  const session = await mongoose.startSession();
+  session.startTransaction();
 
-    if (!companyId || !name) {
-      return res
-        .status(400)
-        .json({ status: false, message: "companyId and name are required." });
+  try {
+    const { companyId, name, address, defaultWarehouseId } = req.body;
+
+    if (!companyId || !name || !defaultWarehouseId) {
+      return res.status(400).json({
+        status: false,
+        message: "companyId, name and defaultWarehouseId are required.",
+      });
     }
 
-    // ✅ Create branch
-    const branch = new BranchModel({ companyId, name, address });
-    await branch.save();
-
-    // ✅ Auto-create default warehouse
-    const defaultWarehouse = new WarehouseModel({
-      branchId: branch._id,
-      name: "Default Storage",
-      isCentral: false,
-      isDefault: true, // 👈 mark as default
+    // 1️⃣ Validate warehouse exists & active
+    const warehouse = await WarehouseModel.findOne({
+      _id: defaultWarehouseId,
+      status: "active",
     });
-    await defaultWarehouse.save();
+
+    if (!warehouse) {
+      await session.abortTransaction();
+      return res.status(400).json({
+        status: false,
+        message: "Default warehouse not found or inactive.",
+      });
+    }
+
+    // 2️⃣ Create the branch
+    const branch = await BranchModel.create(
+      [
+        {
+          companyId,
+          name,
+          address,
+          defaultWarehouseId,
+        },
+      ],
+      { session }
+    );
+
+    const createdBranch = branch[0]; // because create() with array returns array
+
+    // 3️⃣ Auto-link branch to warehouse.branchIds if not present
+    const alreadyLinked = warehouse.branchIds?.some((id) =>
+      id.equals(createdBranch._id)
+    );
+
+    if (!alreadyLinked) {
+      warehouse.branchIds.push(createdBranch._id);
+      await warehouse.save({ session });
+    }
+
+    // 4️⃣ Commit transaction
+    await session.commitTransaction();
+    session.endSession();
 
     return res.status(201).json({
       status: true,
-      message: "Branch created successfully with default warehouse.",
-      data: { branch, defaultWarehouse },
+      message:
+        "Branch created successfully and linked to the default warehouse.",
+      data: createdBranch,
     });
   } catch (error: any) {
+    await session.abortTransaction();
+    session.endSession();
+
     if (error.code === 11000) {
       return res.status(400).json({
         status: false,
         message: "Branch name must be unique within the company.",
       });
     }
-    return res.status(500).json({ status: false, message: error.message });
+
+    return res.status(500).json({
+      status: false,
+      message: error.message,
+    });
   }
 };
 
@@ -84,11 +126,18 @@ export const getBranches = async (req: Request, res: Response) => {
       limit: limitNum,
       sort,
       lean: true,
-      select: "name address status", // 🔹 only these fields
-      populate: {
-        path: "companyId",
-        select: "name", // 🔹 Only fetch specific fields from Company
-      },
+      select:
+        "name address status companyId defaultWarehouseId createdAt updatedAt", // 🔹 only these fields
+      populate: [
+        {
+          path: "companyId",
+          select: "name", // 🔹 Only fetch specific fields from Company
+        },
+        {
+          path: "defaultWarehouseId",
+          select: "name branchIds status",
+        },
+      ],
     });
 
     // ✅ Standardized response
@@ -119,10 +168,16 @@ export const getBranchById = async (req: Request, res: Response) => {
       _id: req.body.id,
       status: { $ne: "deleted" },
     })
-      .select("name address status companyId")
+      .select(
+        "name address status companyId defaultWarehouseId createdAt updatedAt"
+      )
       .populate({
         path: "companyId",
         select: "name code", // only fetch required company fields
+      })
+      .populate({
+        path: "defaultWarehouseId",
+        select: "name branchIds status",
       })
       .lean(); // optional, gives plain JS object
 
@@ -141,61 +196,77 @@ export const getBranchById = async (req: Request, res: Response) => {
   }
 };
 
-// Soft delete a branch
 export const deleteBranch = async (req: Request, res: Response) => {
   const session = await mongoose.startSession();
-  try {
-    session.startTransaction();
 
+  try {
     const { id } = req.body;
+
     if (!id) {
       return res
         .status(400)
         .json({ status: false, message: "Branch ID is required." });
     }
 
-    // 🔹 Find and update only if branch is active
-    const branch = await BranchModel.findOneAndUpdate(
-      { _id: id, status: "active" },
-      { status: "deleted" },
-      { new: true, session }
-    );
-
-    if (!branch) {
+    if (!mongoose.Types.ObjectId.isValid(id)) {
       return res
-        .status(404)
-        .json({
-          status: false,
-          message: "Branch not found or already deleted.",
-        });
+        .status(400)
+        .json({ status: false, message: "Invalid Branch ID." });
     }
 
-    // 🔹 Step 2: Soft delete all warehouses under this branch
-    await WarehouseModel.updateMany(
-      { branchId: branch._id, status: { $ne: "deleted" } },
-      { $set: { status: "deleted" } },
-      { session }
-    );
+    // Run everything inside a transaction
+    await session.withTransaction(async () => {
+      // 1) Soft-delete the branch only if it's currently active
+      const branch = await BranchModel.findOneAndUpdate(
+        { _id: id, status: "active" },
+        { $set: { status: "deleted" } },
+        { new: true, session }
+      );
 
-    // 🔹 Step 3: Commit the transaction
-    await session.commitTransaction();
+      if (!branch) {
+        // Throw an error to abort the transaction. We'll catch it outside and return 404.
+        const err: any = new Error("Branch not found or already deleted.");
+        err.statusCode = 404;
+        throw err;
+      }
 
-    return res
-      .status(200)
-      .json({ status: true, message: "Branch and its warehouses deleted successfully (soft delete)." });
+      // 2) Remove this branch reference from all warehouses
+      await WarehouseModel.updateMany(
+        { branchIds: branch._id },
+        { $pull: { branchIds: branch._id } },
+        { session }
+      );
+
+      // 👉 We are NOT deleting the warehouse even if branchIds become empty
+      //    Warehouses remain active with branchIds: []
+      //    This is allowed and matches your schema design
+    }); // end withTransaction
+
+    // If we reach here transaction committed successfully
+    return res.status(200).json({
+      status: true,
+      message:
+        "Branch and related warehouses updated successfully (pulled the branchId).",
+    });
   } catch (error: any) {
-    // 🔹 Rollback on any error
-    await session.abortTransaction();
-    return res.status(500).json({ status: false, message: error.message || "Failed to delete branch." });
+    // If the thrown error included a statusCode (like 404), respect it
+    const statusCode = error?.statusCode || 500;
+    const msg =
+      error?.message || "Failed to delete branch. Transaction aborted.";
+
+    return res.status(statusCode).json({
+      status: false,
+      message: msg,
+    });
   } finally {
-    // ✅ Always end the session
+    // Always end the session
     await session.endSession();
   }
 };
 
 export const updateBranch = async (req: Request, res: Response) => {
   try {
-    const { id, name, address, status } = req.body;
+    const { id, name, address } = req.body;
 
     if (!id) {
       return res
@@ -214,7 +285,6 @@ export const updateBranch = async (req: Request, res: Response) => {
     // ✅ Apply updates (only fields that are provided)
     if (name !== undefined) branch.name = name.trim();
     if (address !== undefined) branch.address = address.trim();
-    if (status !== undefined) branch.status = status;
 
     // ✅ Save with validation
     await branch.save();
@@ -233,9 +303,7 @@ export const updateBranch = async (req: Request, res: Response) => {
       });
     }
 
-    return res
-      .status(500)
-      .json({ status: false, message: error.message || "Server error" });
+    return res.status(500).json({ status: false, message: error.message });
   }
 };
 
@@ -269,9 +337,7 @@ export const getBranchesForDropdown = async (req: Request, res: Response) => {
   } catch (error: any) {
     return res.status(500).json({
       status: false,
-      message: error.message || "Failed to fetch branches.",
+      message: error.message,
     });
   }
 };
-
-

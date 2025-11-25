@@ -2,7 +2,9 @@ import mongoose, { Schema, model, Document, Types } from "mongoose";
 import mongoosePaginate from "mongoose-paginate-v2";
 
 export interface IBranch extends Document {
+  _id: Types.ObjectId;
   companyId: Types.ObjectId;
+  defaultWarehouseId: Types.ObjectId;
   name: string;
   address?: string;
   status: "active" | "deleted";
@@ -21,8 +23,14 @@ const BranchSchema = new Schema<IBranch>(
       required: true,
       index: true,
     },
+    defaultWarehouseId: {
+      type: Schema.Types.ObjectId,
+      ref: "Warehouse",
+      required: true,
+    },
     name: { type: String, required: true },
     address: { type: String },
+
     status: { type: String, enum: ["active", "deleted"], default: "active" },
   },
   { timestamps: true }
