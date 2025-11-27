@@ -3,94 +3,94 @@ import { Request, Response } from "express";
 import { WarehouseModel } from "../models/warehouse.model";
 import mongoose from "mongoose";
 import { InventoryModel } from "../models/inventory.model";
+import { BranchModel } from "../models/branch.model";
 
 export const createWarehouse = async (req: Request, res: Response) => {
   const session = await mongoose.startSession();
   try {
-    const {
-      branchId,
-      name,
-      isCentral = false,
-      coordinates,
-      isDefault = false,
-    } = req.body;
+    const { companyId, branchIds, name, coordinates } = req.body;
 
-    if (!branchId || !name) {
-      return res
-        .status(400)
-        .json({ status: false, message: "branchId and name are required." });
+    if (!companyId || !name || !coordinates) {
+      return res.status(400).json({
+        status: false,
+        message: "companyId, name and coordinates are required.",
+      });
     }
 
-    // start transaction
+    let geoCoordinates = undefined;
+    if (coordinates) {
+      geoCoordinates = Array.isArray(coordinates)
+        ? { type: "Point", coordinates }
+        : coordinates;
+    }
+    const normalizedBranchIds = Array.isArray(branchIds) ? branchIds : [];
+    let createdWarehouse: any = null;
+
     await session.withTransaction(async () => {
-      // If isCentral true, unset existing central for the branch
-      if (isCentral) {
-        await WarehouseModel.updateMany(
-          { branchId, isCentral: true, status: "active" },
-          { $set: { isCentral: false } },
-          { session }
-        );
-      }
+      // Validate branches
+      if (normalizedBranchIds.length > 0) {
+        const branches = await BranchModel.find({
+          _id: { $in: normalizedBranchIds },
+          companyId,
+          status: "active",
+        }).session(session);
 
-      // If isDefault true, unset existing default for the branch
-      if (isDefault) {
-        await WarehouseModel.updateMany(
-          { branchId, isDefault: true, status: "active" },
-          { $set: { isDefault: false } },
-          { session }
-        );
+        if (branches.length !== normalizedBranchIds.length) {
+          throw Object.assign(new Error("Invalid branches."), {
+            statusCode: 400,
+          });
+        }
       }
-
-      const warehouse = new WarehouseModel({
-        branchId,
+      // Create warehouse
+      const w = new WarehouseModel({
+        companyId,
+        branchIds,
         name,
-        isCentral,
-        isDefault,
-        coordinates,
+        coordinates: geoCoordinates,
       });
-      await warehouse.save({ session });
-      // response must be outside transaction callback in some setups,
-      // but keeping simple: return by throwing/capturing result after commit.
-      // We'll attach created warehouse to session for outer scope.
-      (session as any).createdWarehouse = warehouse;
+
+      createdWarehouse = await w.save({ session });
     });
 
-    const created = (session as any).createdWarehouse;
-    session.endSession();
+    await session.endSession();
 
     return res.status(201).json({
       status: true,
       message: "Warehouse created successfully.",
-      data: created,
+      data: createdWarehouse,
     });
-  } catch (error: any) {
-    // Duplicate key could happen if two concurrent creators race despite transaction;
-    // the partial unique index ensures DB-level safety.
-    if (error.code === 11000) {
-      // customize message for isCentral or name duplicate based on key pattern
-      const msg =
-        /isCentral/.test(error.message) || /isDefault/.test(error.message)
-          ? "Only one central/default warehouse is allowed per branch."
-          : "Warehouse name must be unique within this branch.";
-      return res.status(400).json({ status: false, message: msg });
+  } catch (err: any) {
+    await session.endSession();
+
+    if (err?.code === 11000) {
+      return res.status(400).json({
+        status: false,
+        message: "Warehouse name must be unique per company",
+      });
     }
 
-    return res.status(500).json({ status: false, message: error.message });
+    return res.status(err?.statusCode || 500).json({
+      status: false,
+      message: err?.message,
+    });
   }
 };
 
 export const getWarehouses = async (req: Request, res: Response) => {
   try {
     const { page = 1, limit = 10, branchId, status } = req.body;
+    const pageNum = Math.max(1, parseInt(page));
+    const limitNum = Math.max(1, parseInt(limit));
 
     const filter: any = {};
-    if (branchId) filter.branchId = branchId;
+
+    if (branchId) filter.branchIds = branchId;
     if (status) filter.status = status;
 
     const options = {
-      page: parseInt(page),
-      limit: parseInt(limit),
-      populate: { path: "branchId", select: "name" },
+      page: pageNum,
+      limit: limitNum,
+      populate: { path: "branchIds", select: "name address" },
       sort: { createdAt: -1 },
     };
 

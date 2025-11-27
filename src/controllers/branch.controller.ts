@@ -27,7 +27,7 @@ export const createBranch = async (req: Request, res: Response) => {
       await session.abortTransaction();
       return res.status(400).json({
         status: false,
-        message: "Default warehouse not found or inactive.",
+        message: "Default warehouse not found",
       });
     }
 

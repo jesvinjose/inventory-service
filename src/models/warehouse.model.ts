@@ -51,10 +51,7 @@ const WarehouseSchema = new Schema<IWarehouse>(
 // Unique warehouse name per company
 WarehouseSchema.index({ companyId: 1, name: 1 }, { unique: true });
 
-WarehouseSchema.index({ branchIds: 1, name: 1 }, { unique: true });
-
-// Optional: enable geo queries when you actually store coordinates
-// WarehouseSchema.index({ "coordinates": "2dsphere" });
+WarehouseSchema.index({ branchIds: 1 }); // non-unique
 
 WarehouseSchema.plugin(mongoosePaginate);
 
